@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hochzeit Hutzenthaler · Foto-Portal</title>
+  <meta name="description" content="Das gemeinsame Fotoalbum der Hochzeitsgesellschaft – anschauen, hochladen, herunterladen.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Infant:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=Great+Vibes&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💍</text></svg>">
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true">
+    <div class="glow glow-1"></div>
+    <div class="glow glow-2"></div>
+    <div class="glow glow-3"></div>
+  </div>
+
+  <header class="topbar glass">
+    <a href="#/" class="brand">
+      <svg class="brand-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true">
+        <path d="M12 21C12 21 4 13.9 4 8.9C4 6.2 6.2 4 8.9 4C10.2 4 11.4 4.6 12 5.5C12.6 4.6 13.8 4 15.1 4C17.8 4 20 6.2 20 8.9C20 13.9 12 21 12 21Z" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <span class="brand-name">Hutzenthaler</span>
+    </a>
+    <button id="btn-new-album" class="btn btn-ghost" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+      <span>Neues Album</span>
+    </button>
+  </header>
+
+  <main id="app">
+    <!-- rendered by app.js -->
+  </main>
+
+  <footer class="footer">
+    <p>Mit <span class="heart">♥</span> für die gesamte Hochzeitsgesellschaft</p>
+  </footer>
+
+  <!-- Lightbox / Karussell -->
+  <div id="lightbox" class="lightbox" hidden>
+    <button class="lb-btn lb-close" aria-label="Schließen">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>
+    </button>
+    <button class="lb-btn lb-prev" aria-label="Vorheriges Bild">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="lb-stage" id="lb-stage"></div>
+    <button class="lb-btn lb-next" aria-label="Nächstes Bild">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </button>
+    <div class="lb-bottom glass">
+      <span id="lb-counter" class="lb-counter">1 / 1</span>
+      <button id="lb-download" class="btn btn-gold btn-sm" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Download</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Dialog: Neues Album -->
+  <dialog id="dlg-album" class="dialog glass-strong">
+    <form method="dialog" id="form-album">
+      <h3>Neues Album anlegen</h3>
+      <label for="album-name">Albumname</label>
+      <input id="album-name" name="name" type="text" required maxlength="60" placeholder="z. B. Standesamt" autocomplete="off">
+      <label for="album-pin">Admin-PIN</label>
+      <input id="album-pin" name="pin" type="password" required placeholder="PIN eingeben" autocomplete="off">
+      <p id="album-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button type="button" class="btn btn-ghost" data-close>Abbrechen</button>
+        <button type="submit" class="btn btn-gold">Anlegen</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Toast -->
+  <div id="toast" class="toast glass-strong" role="status" aria-live="polite" hidden></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

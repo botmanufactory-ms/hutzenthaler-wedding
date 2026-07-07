@@ -1,0 +1,550 @@
+/* Hutzenthaler Wedding – Foto-Portal
+   Vanilla JS + Supabase (Storage + RPC) */
+
+import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+const SUPABASE_URL = 'https://ttlvnxjlorejwntxxxzt.supabase.co';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0bHZueGpsb3JlandudHh4eHp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0NjM5MjgsImV4cCI6MjA5OTAzOTkyOH0.B9OtpkmV7qNs6CK0EVzRNJcPtzBHNrj9NwN4repfXlI';
+const BUCKET = 'wedding';
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const app = document.getElementById('app');
+const lightbox = document.getElementById('lightbox');
+const lbStage = document.getElementById('lb-stage');
+const lbCounter = document.getElementById('lb-counter');
+const lbDownload = document.getElementById('lb-download');
+
+const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic'];
+const VIDEO_EXT = ['mp4', 'mov', 'webm', 'm4v'];
+
+let albumsCache = null;
+let currentMedia = [];
+let lbIndex = 0;
+let transformsBroken = false;
+
+/* ---------------- helpers ---------------- */
+
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c]));
+
+const extOf = (name) => name.split('.').pop().toLowerCase();
+const isImage = (name) => IMAGE_EXT.includes(extOf(name));
+const isVideo = (name) => VIDEO_EXT.includes(extOf(name));
+
+const publicUrl = (path) =>
+  `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
+
+const thumbUrl = (path, width = 640) => {
+  if (transformsBroken || !isImage(path)) return publicUrl(path);
+  return `${SUPABASE_URL}/storage/v1/render/image/public/${BUCKET}/${encodeURIComponent(path).replace(/%2F/g, '/')}?width=${width}&quality=78&resize=contain`;
+};
+
+function toast(msg, ms = 3500) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.hidden = false;
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.hidden = true; }, ms);
+}
+
+function fmtBytes(n) {
+  if (!n) return '';
+  const u = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
+}
+
+/* ---------------- data ---------------- */
+
+async function fetchAlbums(force = false) {
+  if (albumsCache && !force) return albumsCache;
+  const { data, error } = await supabase
+    .from('albums')
+    .select('*')
+    .order('sort_order', { ascending: true })
+    .order('created_at', { ascending: true });
+  if (error) throw error;
+  albumsCache = data;
+  return data;
+}
+
+async function listAlbumFiles(slug) {
+  const files = [];
+  const pageSize = 1000;
+  let offset = 0;
+  for (;;) {
+    const { data, error } = await supabase.storage.from(BUCKET).list(slug, {
+      limit: pageSize,
+      offset,
+      sortBy: { column: 'created_at', order: 'desc' },
+    });
+    if (error) throw error;
+    const batch = (data || []).filter((f) => f.id && (isImage(f.name) || isVideo(f.name)));
+    files.push(...batch);
+    if (!data || data.length < pageSize) break;
+    offset += pageSize;
+  }
+  return files.map((f) => ({
+    name: f.name,
+    path: `${slug}/${f.name}`,
+    size: f.metadata?.size || 0,
+    video: isVideo(f.name),
+  }));
+}
+
+/* ---------------- router ---------------- */
+
+window.addEventListener('hashchange', route);
+
+async function route() {
+  closeLightbox();
+  const hash = location.hash || '#/';
+  const m = hash.match(/^#\/album\/([^/]+)/);
+  try {
+    if (m) await renderAlbum(decodeURIComponent(m[1]));
+    else await renderHome();
+  } catch (err) {
+    console.error(err);
+    app.innerHTML = `<div class="state-box"><p>Etwas ist schiefgelaufen. Bitte Seite neu laden.</p></div>`;
+  }
+  window.scrollTo({ top: 0, behavior: 'instant' });
+}
+
+/* ---------------- home ---------------- */
+
+async function renderHome() {
+  app.innerHTML = `
+    <section class="hero">
+      <h1 class="hero-script">Unsere Hochzeit</h1>
+      <p class="hero-sub">Alle Momente unseres schönsten Tages – von euch allen festgehalten. Schaut euch die Bilder an, ladet eure eigenen hoch und nehmt eure Lieblingsmomente mit nach Hause.</p>
+      <div class="hero-divider">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21C12 21 4 13.9 4 8.9C4 6.2 6.2 4 8.9 4C10.2 4 11.4 4.6 12 5.5C12.6 4.6 13.8 4 15.1 4C17.8 4 20 6.2 20 8.9C20 13.9 12 21 12 21Z"/></svg>
+      </div>
+    </section>
+    <section class="album-grid" id="album-grid">
+      ${'<div class="skeleton"></div>'.repeat(2)}
+    </section>`;
+
+  const albums = await fetchAlbums(true);
+  const grid = document.getElementById('album-grid');
+
+  if (!albums.length) {
+    grid.outerHTML = `<div class="state-box"><p>Noch keine Alben vorhanden. Lege über „Neues Album" das erste an.</p></div>`;
+    return;
+  }
+
+  grid.innerHTML = albums.map((a) => `
+    <a class="album-card" href="#/album/${encodeURIComponent(a.slug)}" data-slug="${esc(a.slug)}">
+      <div class="album-cover-empty">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 3-3 6 6"/></svg>
+      </div>
+      <div class="album-meta">
+        <span class="album-title">${esc(a.name)}</span>
+        <span class="album-count" data-count>…</span>
+      </div>
+    </a>`).join('');
+
+  // covers + counts, loaded per album in parallel
+  albums.forEach(async (a) => {
+    const card = grid.querySelector(`[data-slug="${CSS.escape(a.slug)}"]`);
+    if (!card) return;
+    try {
+      const files = await listAlbumFiles(a.slug);
+      card.querySelector('[data-count]').textContent =
+        files.length === 1 ? '1 Datei' : `${files.length} Dateien`;
+      const cover = files.find((f) => !f.video) || files[0];
+      if (cover && !cover.video) {
+        const img = new Image();
+        img.className = 'album-cover';
+        img.alt = '';
+        img.loading = 'lazy';
+        img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = publicUrl(cover.path); };
+        img.src = thumbUrl(cover.path, 800);
+        card.prepend(img);
+      }
+    } catch { /* count stays "…" */ }
+  });
+}
+
+/* ---------------- album ---------------- */
+
+async function renderAlbum(slug) {
+  const albums = await fetchAlbums();
+  const album = albums.find((a) => a.slug === slug);
+  if (!album) { location.hash = '#/'; return; }
+
+  app.innerHTML = `
+    <a class="breadcrumb" href="#/">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Alle Alben
+    </a>
+    <div class="album-head glass">
+      <h2>${esc(album.name)}</h2>
+      <div class="head-actions">
+        <button class="btn" id="btn-upload" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0L8 8m4-4l4 4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Fotos hochladen</span>
+        </button>
+        <button class="btn btn-gold" id="btn-download-all" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Alle herunterladen</span>
+        </button>
+      </div>
+      <p class="head-sub" id="album-sub">Wird geladen …</p>
+    </div>
+    <div class="upload-zone" id="upload-zone" hidden>
+      <p>Dateien hierher ziehen oder auswählen – Fotos und Videos, gerne in voller Auflösung.</p>
+      <button class="btn btn-gold" id="btn-pick" type="button">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 3-3 6 6"/></svg>
+        <span>Dateien auswählen</span>
+      </button>
+      <input type="file" id="file-input" multiple accept="image/*,video/*" hidden>
+      <div class="upload-progress" id="upload-progress"></div>
+    </div>
+    <div class="photo-grid" id="photo-grid">
+      ${'<div class="skeleton"></div>'.repeat(12)}
+    </div>`;
+
+  const zone = document.getElementById('upload-zone');
+  const input = document.getElementById('file-input');
+  document.getElementById('btn-upload').addEventListener('click', () => {
+    zone.hidden = !zone.hidden;
+    if (!zone.hidden) zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  });
+  document.getElementById('btn-pick').addEventListener('click', () => input.click());
+  input.addEventListener('change', () => uploadFiles(slug, [...input.files]));
+  ['dragover', 'dragenter'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragover'); }));
+  ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragover'); }));
+  zone.addEventListener('drop', (e) => uploadFiles(slug, [...e.dataTransfer.files]));
+
+  await loadAlbumGrid(slug);
+}
+
+async function loadAlbumGrid(slug) {
+  const grid = document.getElementById('photo-grid');
+  const sub = document.getElementById('album-sub');
+  const files = await listAlbumFiles(slug);
+  currentMedia = files;
+
+  const total = files.reduce((s, f) => s + f.size, 0);
+  if (sub) sub.textContent = files.length
+    ? `${files.length} ${files.length === 1 ? 'Datei' : 'Dateien'}${total ? ` · ${fmtBytes(total)}` : ''}`
+    : 'Noch keine Fotos – sei die/der Erste!';
+
+  const dlAll = document.getElementById('btn-download-all');
+  if (dlAll) dlAll.disabled = !files.length;
+
+  if (!files.length) {
+    grid.innerHTML = `<div class="state-box" style="grid-column:1/-1">
+      <p>Dieses Album wartet noch auf seine ersten Momente.</p>
+    </div>`;
+    return;
+  }
+
+  grid.innerHTML = files.map((f, i) => `
+    <button class="photo-tile" data-index="${i}" type="button" aria-label="${esc(f.name)} öffnen">
+      ${f.video
+        ? `<span class="tile-badge"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg></span>`
+        : ''}
+    </button>`).join('');
+
+  grid.addEventListener('click', (e) => {
+    const tile = e.target.closest('.photo-tile');
+    if (tile) openLightbox(Number(tile.dataset.index));
+  });
+
+  // Lazy-load media into tiles
+  const io = new IntersectionObserver((entries) => {
+    entries.forEach((entry) => {
+      if (!entry.isIntersecting) return;
+      const tile = entry.target;
+      io.unobserve(tile);
+      const f = files[Number(tile.dataset.index)];
+      if (!f) return;
+      if (f.video) {
+        const v = document.createElement('video');
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = 'metadata';
+        v.src = publicUrl(f.path) + '#t=0.5';
+        v.addEventListener('loadeddata', () => v.classList.add('loaded'), { once: true });
+        tile.prepend(v);
+      } else {
+        const img = new Image();
+        img.alt = '';
+        img.decoding = 'async';
+        img.onload = () => img.classList.add('loaded');
+        img.onerror = () => {
+          transformsBroken = true;
+          img.onerror = null;
+          img.src = publicUrl(f.path);
+        };
+        img.src = thumbUrl(f.path, 640);
+        tile.prepend(img);
+      }
+    });
+  }, { rootMargin: '600px' });
+
+  grid.querySelectorAll('.photo-tile').forEach((t) => io.observe(t));
+
+  const dlBtn = document.getElementById('btn-download-all');
+  if (dlBtn && !dlBtn._wired) {
+    dlBtn._wired = true;
+    dlBtn.addEventListener('click', () => downloadAll(slug));
+  }
+}
+
+/* ---------------- upload ---------------- */
+
+function sanitizeFileName(name) {
+  const dot = name.lastIndexOf('.');
+  const base = (dot > 0 ? name.slice(0, dot) : name)
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-zA-Z0-9-_]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'datei';
+  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : 'bin';
+  return `${base}.${ext}`;
+}
+
+function uploadOne(path, file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`);
+    xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON_KEY}`);
+    xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY);
+    xhr.setRequestHeader('x-upsert', 'false');
+    xhr.setRequestHeader('cache-control', 'max-age=31536000');
+    if (file.type) xhr.setRequestHeader('content-type', file.type);
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable) onProgress(e.loaded / e.total);
+    });
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300)
+      ? resolve()
+      : reject(new Error(`Upload fehlgeschlagen (${xhr.status})`));
+    xhr.onerror = () => reject(new Error('Netzwerkfehler beim Upload'));
+    xhr.send(file);
+  });
+}
+
+async function uploadFiles(slug, files) {
+  const valid = files.filter((f) => isImage(f.name) || isVideo(f.name) || f.type.startsWith('image/') || f.type.startsWith('video/'));
+  if (!valid.length) { toast('Bitte nur Fotos oder Videos hochladen.'); return; }
+
+  const progressBox = document.getElementById('upload-progress');
+  progressBox.innerHTML = '';
+  const rows = valid.map((f) => {
+    const row = document.createElement('div');
+    row.className = 'up-row';
+    row.innerHTML = `
+      <span class="up-name">${esc(f.name)}</span>
+      <span class="up-bar"><i></i></span>
+      <span class="up-status"><span class="spinner" style="width:18px;height:18px;border-width:2px;margin:0"></span></span>`;
+    progressBox.appendChild(row);
+    return row;
+  });
+
+  let ok = 0, fail = 0;
+  for (let i = 0; i < valid.length; i++) {
+    const f = valid[i];
+    const bar = rows[i].querySelector('.up-bar > i');
+    const status = rows[i].querySelector('.up-status');
+    const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const path = `${slug}/${stamp}-${sanitizeFileName(f.name)}`;
+    try {
+      await uploadOne(path, f, (p) => { bar.style.width = `${Math.round(p * 100)}%`; });
+      bar.style.width = '100%';
+      status.innerHTML = `<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+      ok++;
+    } catch (err) {
+      console.error(err);
+      status.innerHTML = `<svg class="fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>`;
+      fail++;
+    }
+  }
+
+  toast(fail
+    ? `${ok} hochgeladen, ${fail} fehlgeschlagen.`
+    : `${ok} ${ok === 1 ? 'Datei' : 'Dateien'} erfolgreich hochgeladen – danke!`);
+  await loadAlbumGrid(slug);
+}
+
+/* ---------------- download ---------------- */
+
+async function downloadBlob(url, filename) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Download fehlgeschlagen (${res.status})`);
+  const blob = await res.blob();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+
+async function downloadAll(slug) {
+  const btn = document.getElementById('btn-download-all');
+  const label = btn.querySelector('span');
+  const files = currentMedia;
+  if (!files.length) return;
+
+  const total = files.reduce((s, f) => s + f.size, 0);
+  if (total > 700 * 1024 * 1024) {
+    const goOn = confirm(`Dieses Album ist ${fmtBytes(total)} groß. Der ZIP-Download kann den Browser überfordern – auf dem Handy lieber einzelne Bilder speichern.\n\nTrotzdem fortfahren?`);
+    if (!goOn) return;
+  }
+
+  btn.disabled = true;
+  try {
+    const zip = new JSZip();
+    for (let i = 0; i < files.length; i++) {
+      label.textContent = `Lade ${i + 1} / ${files.length} …`;
+      const res = await fetch(publicUrl(files[i].path));
+      if (!res.ok) continue;
+      zip.file(files[i].name, await res.blob(), { compression: 'STORE' });
+    }
+    label.textContent = 'Packe ZIP …';
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `hochzeit-${slug}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    label.textContent = 'Alle herunterladen';
+    toast('ZIP-Download gestartet.');
+  } catch (err) {
+    console.error(err);
+    label.textContent = 'Alle herunterladen';
+    toast('Download fehlgeschlagen – bitte erneut versuchen.');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+/* ---------------- lightbox / karussell ---------------- */
+
+function openLightbox(index) {
+  lbIndex = index;
+  lightbox.hidden = false;
+  document.body.style.overflow = 'hidden';
+  renderLightbox();
+}
+
+function closeLightbox() {
+  if (lightbox.hidden) return;
+  lightbox.hidden = true;
+  lbStage.innerHTML = '';
+  document.body.style.overflow = '';
+}
+
+function renderLightbox() {
+  const f = currentMedia[lbIndex];
+  if (!f) return;
+  lbCounter.textContent = `${lbIndex + 1} / ${currentMedia.length}`;
+  lbStage.innerHTML = '';
+
+  if (f.video) {
+    const v = document.createElement('video');
+    v.src = publicUrl(f.path);
+    v.controls = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    lbStage.appendChild(v);
+  } else {
+    const img = new Image();
+    img.alt = f.name;
+    img.src = publicUrl(f.path); // volle Original-Auflösung
+    lbStage.appendChild(img);
+  }
+
+  // Nachbarn vorladen
+  [lbIndex - 1, lbIndex + 1].forEach((i) => {
+    const n = currentMedia[i];
+    if (n && !n.video) { const pre = new Image(); pre.src = publicUrl(n.path); }
+  });
+}
+
+function lbStep(dir) {
+  if (!currentMedia.length) return;
+  lbIndex = (lbIndex + dir + currentMedia.length) % currentMedia.length;
+  renderLightbox();
+}
+
+lightbox.querySelector('.lb-close').addEventListener('click', closeLightbox);
+lightbox.querySelector('.lb-prev').addEventListener('click', () => lbStep(-1));
+lightbox.querySelector('.lb-next').addEventListener('click', () => lbStep(1));
+lightbox.addEventListener('click', (e) => { if (e.target === lightbox || e.target === lbStage) closeLightbox(); });
+lbDownload.addEventListener('click', async () => {
+  const f = currentMedia[lbIndex];
+  if (!f) return;
+  lbDownload.disabled = true;
+  try { await downloadBlob(publicUrl(f.path), f.name); }
+  catch { toast('Download fehlgeschlagen.'); }
+  finally { lbDownload.disabled = false; }
+});
+
+document.addEventListener('keydown', (e) => {
+  if (lightbox.hidden) return;
+  if (e.key === 'Escape') closeLightbox();
+  if (e.key === 'ArrowLeft') lbStep(-1);
+  if (e.key === 'ArrowRight') lbStep(1);
+});
+
+// Touch-Swipe im Lightbox
+let touchX = null;
+lbStage.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+lbStage.addEventListener('touchend', (e) => {
+  if (touchX === null) return;
+  const dx = e.changedTouches[0].clientX - touchX;
+  if (Math.abs(dx) > 48) lbStep(dx > 0 ? -1 : 1);
+  touchX = null;
+}, { passive: true });
+
+/* ---------------- neues Album (Admin) ---------------- */
+
+const dlg = document.getElementById('dlg-album');
+const form = document.getElementById('form-album');
+const albumError = document.getElementById('album-error');
+
+document.getElementById('btn-new-album').addEventListener('click', () => {
+  form.reset();
+  albumError.hidden = true;
+  dlg.showModal();
+});
+dlg.querySelector('[data-close]').addEventListener('click', () => dlg.close());
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  albumError.hidden = true;
+  const name = form.name.value.trim();
+  const pin = form.pin.value;
+  const submitBtn = form.querySelector('[type="submit"]');
+  submitBtn.disabled = true;
+  try {
+    const { data, error } = await supabase.rpc('create_album', { p_name: name, p_pin: pin });
+    if (error) {
+      if (error.message.includes('INVALID_PIN')) throw new Error('Falscher PIN.');
+      if (error.message.includes('duplicate')) throw new Error('Ein Album mit diesem Namen existiert bereits.');
+      throw new Error('Album konnte nicht angelegt werden.');
+    }
+    dlg.close();
+    albumsCache = null;
+    toast(`Album „${data.name}" wurde angelegt.`);
+    location.hash = `#/album/${encodeURIComponent(data.slug)}`;
+    if (location.hash === `#/album/${encodeURIComponent(data.slug)}`) route();
+  } catch (err) {
+    albumError.textContent = err.message;
+    albumError.hidden = false;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+/* ---------------- start ---------------- */
+route();
