@@ -118,8 +118,8 @@ async function route() {
 async function renderHome() {
   app.innerHTML = `
     <section class="hero">
-      <h1 class="hero-script">Unsere Hochzeit</h1>
-      <p class="hero-sub">Alle Momente unseres schönsten Tages – von euch allen festgehalten. Schaut euch die Bilder an, ladet eure eigenen hoch und nehmt eure Lieblingsmomente mit nach Hause.</p>
+      <h1 class="hero-script">Nathalie &amp; Leon</h1>
+      <p class="hero-sub">05. Juni 2026 · Alle Momente unseres schönsten Tages – von euch allen festgehalten. Schaut euch die Bilder an, ladet eure eigenen hoch und nehmt eure Lieblingsmomente mit nach Hause.</p>
       <div class="hero-divider">
         <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21C12 21 4 13.9 4 8.9C4 6.2 6.2 4 8.9 4C10.2 4 11.4 4.6 12 5.5C12.6 4.6 13.8 4 15.1 4C17.8 4 20 6.2 20 8.9C20 13.9 12 21 12 21Z"/></svg>
       </div>
@@ -163,7 +163,7 @@ async function renderHome() {
         img.loading = 'lazy';
         img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = publicUrl(cover.path); };
         img.src = thumbUrl(cover.path, 800);
-        card.prepend(img);
+        card.insertBefore(img, card.querySelector('.album-meta'));
       }
     } catch { /* count stays "…" */ }
   });
