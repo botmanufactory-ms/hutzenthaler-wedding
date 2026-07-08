@@ -144,7 +144,7 @@ function renderLogin(errorMsg = '') {
   toggleBgVideo(true);
   app.innerHTML = `
     <section class="hero" style="padding-bottom:12px">
-      <p class="hero-kicker">Korfu · 05. Juni 2026</p>
+      <p class="hero-kicker">Korfu · 04. &amp; 05. Juni 2026</p>
       <h1 class="hero-script">Nathalie <em>&amp;</em> Leon</h1>
       <p class="hero-sub">Das Fotoalbum unserer Hochzeit</p>
       <div class="hero-divider" aria-hidden="true"><span></span></div>
@@ -231,7 +231,7 @@ async function route() {
 async function renderHome() {
   app.innerHTML = `
     <section class="hero">
-      <p class="hero-kicker">Korfu · 05. Juni 2026</p>
+      <p class="hero-kicker">Korfu · 04. &amp; 05. Juni 2026</p>
       <h1 class="hero-script">Nathalie <em>&amp;</em> Leon</h1>
       <p class="hero-sub">Alle Momente unseres schönsten Tages – von euch allen festgehalten. Schaut euch die Bilder an, ladet eure eigenen hoch und nehmt eure Lieblingsmomente mit nach Hause.</p>
       <div class="hero-divider" aria-hidden="true"><span></span></div>
