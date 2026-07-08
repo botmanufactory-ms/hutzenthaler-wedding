@@ -76,6 +76,10 @@ function originalUrl(path) {
   return urlCache.get(path);
 }
 
+// Vorgenerierte Thumbnails: thumbs/<album>/<datei>.jpg
+const thumbPathOf = (path) => `thumbs/${path}.jpg`;
+const preThumb = (path) => urlCache.get(thumbPathOf(path)) || null;
+
 async function thumbUrl(path, width) {
   if (transformsBroken || !isImage(path)) return originalUrl(path);
   const key = `${path}#w${width}`;
@@ -244,15 +248,15 @@ async function renderHome() {
       const files = await listAlbumFiles(a.slug);
       card.querySelector('[data-count]').textContent =
         files.length === 1 ? '1 Datei' : `${files.length} Dateien`;
-      const cover = files.find((f) => !f.video) || null;
+      const cover = files.find((f) => !f.video) || files[0] || null;
       if (cover) {
-        await signPaths([cover.path]);
+        await signPaths([cover.path, thumbPathOf(cover.path)]);
         const img = new Image();
         img.className = 'album-cover';
         img.alt = '';
-        img.loading = 'lazy';
+        const pre = preThumb(cover.path);
         img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = originalUrl(cover.path); };
-        img.src = await thumbUrl(cover.path, 800);
+        img.src = pre || await thumbUrl(cover.path, 800);
         card.insertBefore(img, card.querySelector('.album-meta'));
       }
     } catch { /* Zähler bleibt "…" */ }
@@ -327,7 +331,10 @@ async function loadAlbumGrid(slug) {
   const grid = document.getElementById('photo-grid');
   const sub = document.getElementById('album-sub');
   const files = await listAlbumFiles(slug);
-  await signPaths(files.map((f) => f.path));
+  await signPaths([
+    ...files.map((f) => f.path),
+    ...files.map((f) => thumbPathOf(f.path)),
+  ]);
   currentMedia = files;
 
   const total = files.reduce((s, f) => s + f.size, 0);
@@ -364,7 +371,9 @@ async function loadAlbumGrid(slug) {
       io.unobserve(tile);
       const f = files[Number(tile.dataset.index)];
       if (!f) return;
-      if (f.video) {
+      const pre = preThumb(f.path);
+      if (f.video && !pre) {
+        // Kein Standbild vorhanden -> Notlösung: Video-Metadaten laden
         const v = document.createElement('video');
         v.muted = true;
         v.playsInline = true;
@@ -372,19 +381,27 @@ async function loadAlbumGrid(slug) {
         v.src = originalUrl(f.path) + '#t=0.5';
         v.addEventListener('loadeddata', () => v.classList.add('loaded'), { once: true });
         tile.prepend(v);
+        return;
+      }
+      const img = new Image();
+      img.alt = '';
+      img.decoding = 'async';
+      img.onload = () => img.classList.add('loaded');
+      if (pre) {
+        img.onerror = async () => {
+          img.onerror = () => { img.onerror = null; img.src = originalUrl(f.path); };
+          img.src = await thumbUrl(f.path, 640);
+        };
+        img.src = pre;
       } else {
-        const img = new Image();
-        img.alt = '';
-        img.decoding = 'async';
-        img.onload = () => img.classList.add('loaded');
         img.onerror = () => {
           transformsBroken = true;
           img.onerror = null;
           img.src = originalUrl(f.path);
         };
         img.src = await thumbUrl(f.path, 640);
-        tile.prepend(img);
       }
+      tile.prepend(img);
     });
   }, { rootMargin: '600px' });
 
@@ -433,6 +450,48 @@ async function uploadOne(path, file, onProgress) {
   });
 }
 
+// Thumbnail (max 640px JPEG) im Browser erzeugen – Foto oder Video-Standbild
+function drawToJpeg(source, w, h) {
+  const scale = Math.min(1, 640 / Math.max(w, h));
+  const c = document.createElement('canvas');
+  c.width = Math.max(1, Math.round(w * scale));
+  c.height = Math.max(1, Math.round(h * scale));
+  c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+  return new Promise((res) => c.toBlob(res, 'image/jpeg', 0.72));
+}
+
+async function makeThumb(file) {
+  try {
+    if (file.type.startsWith('image/')) {
+      const bmp = await createImageBitmap(file);
+      const blob = await drawToJpeg(bmp, bmp.width, bmp.height);
+      bmp.close?.();
+      return blob;
+    }
+    if (file.type.startsWith('video/')) {
+      return await new Promise((resolve) => {
+        const v = document.createElement('video');
+        v.muted = true;
+        v.playsInline = true;
+        v.preload = 'auto';
+        v.src = URL.createObjectURL(file);
+        let settled = false;
+        const done = (blob) => {
+          if (settled) return;
+          settled = true;
+          URL.revokeObjectURL(v.src);
+          resolve(blob);
+        };
+        v.onerror = () => done(null);
+        v.onloadeddata = () => { v.currentTime = Math.min(0.5, (v.duration || 1) / 2); };
+        v.onseeked = async () => done(await drawToJpeg(v, v.videoWidth, v.videoHeight));
+        setTimeout(() => done(null), 10000);
+      });
+    }
+  } catch { /* Thumbnail ist optional */ }
+  return null;
+}
+
 async function uploadFiles(slug, files) {
   if (!canUploadTo(slug)) { toast('In dieses Album kann nicht hochgeladen werden.'); return; }
   const valid = files.filter((f) => isImage(f.name) || isVideo(f.name) || f.type.startsWith('image/') || f.type.startsWith('video/'));
@@ -463,6 +522,10 @@ async function uploadFiles(slug, files) {
       bar.style.width = '100%';
       status.innerHTML = `<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
       ok++;
+      try {
+        const tb = await makeThumb(f);
+        if (tb) await uploadOne(`thumbs/${path}.jpg`, new File([tb], 'thumb.jpg', { type: 'image/jpeg' }), () => {});
+      } catch { /* Grid hat Fallbacks */ }
     } catch (err) {
       console.error(err);
       status.innerHTML = `<svg class="fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>`;
