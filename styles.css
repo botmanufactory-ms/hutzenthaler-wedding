@@ -46,6 +46,25 @@ body {
   overflow-x: hidden;
 }
 
+/* ----- Hintergrund-Video (nur Startseite) ----- */
+.bg-video { position: fixed; inset: 0; z-index: -2; overflow: hidden; }
+.bg-video video {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  filter: saturate(0.9);
+}
+.bg-video::after {
+  content: "";
+  position: absolute; inset: 0;
+  background: linear-gradient(
+    rgba(243, 238, 228, 0.82),
+    rgba(243, 238, 228, 0.62) 45%,
+    rgba(243, 238, 228, 0.88)
+  );
+}
+body:not(.home) .bg-video { display: none; }
+@media (prefers-reduced-motion: reduce) { .bg-video { display: none !important; } }
+
 /* ----- mediterrane Hintergrund-Aura ----- */
 .bg-glow { position: fixed; inset: 0; z-index: -1; overflow: hidden; }
 .glow { position: absolute; border-radius: 50%; filter: blur(120px); }

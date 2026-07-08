@@ -141,6 +141,7 @@ function applySessionUi() {
 function renderLogin(errorMsg = '') {
   btnNewAlbum.hidden = true;
   btnLogout.hidden = true;
+  toggleBgVideo(true);
   app.innerHTML = `
     <section class="hero" style="padding-bottom:12px">
       <p class="hero-kicker">Korfu · 05. Juni 2026</p>
@@ -192,11 +193,23 @@ btnLogout.addEventListener('click', async () => {
 
 window.addEventListener('hashchange', route);
 
+function toggleBgVideo(show) {
+  document.body.classList.toggle('home', show);
+  const v = document.getElementById('bg-video');
+  if (!v) return;
+  if (show && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    v.play?.().catch(() => {});
+  } else {
+    v.pause?.();
+  }
+}
+
 async function route() {
   closeLightbox();
   if (!session) { renderLogin(); return; }
   const hash = location.hash || '#/';
   const m = hash.match(/^#\/album\/([^/]+)/);
+  toggleBgVideo(!m);
   try {
     if (m) await renderAlbum(decodeURIComponent(m[1]));
     else await renderHome();

@@ -43,7 +43,7 @@ where key = 'admin_pin_hash';
 ## Deployment (Netlify)
 
 ```bash
-rm -rf dist && mkdir dist && cp index.html styles.css app.js dist/
+rm -rf dist && mkdir dist && cp index.html styles.css app.js bg-video.mp4 bg-poster.jpg dist/
 netlify deploy --prod --dir dist
 ```
 

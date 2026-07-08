@@ -5,3 +5,4 @@ node_modules/
 # Local Netlify folder
 .netlify
 dist/
+background_startseite.mp4
