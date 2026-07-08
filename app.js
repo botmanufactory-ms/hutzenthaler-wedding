@@ -193,6 +193,12 @@ btnLogout.addEventListener('click', async () => {
 
 window.addEventListener('hashchange', route);
 
+// Fallback: falls ein Browser das loop-Attribut ignoriert, manuell neu starten
+document.getElementById('bg-video')?.addEventListener('ended', (e) => {
+  e.target.currentTime = 0;
+  e.target.play?.().catch(() => {});
+});
+
 function toggleBgVideo(show) {
   document.body.classList.toggle('home', show);
   const v = document.getElementById('bg-video');
