@@ -64,12 +64,13 @@ function fmtBytes(n) {
 
 async function signPaths(paths) {
   const missing = [...new Set(paths)].filter((p) => !urlCache.has(p));
-  for (let i = 0; i < missing.length; i += 100) {
-    const chunk = missing.slice(i, i + 100);
+  const chunks = [];
+  for (let i = 0; i < missing.length; i += 100) chunks.push(missing.slice(i, i + 100));
+  await Promise.all(chunks.map(async (chunk) => {
     const { data, error } = await supabase.storage.from(BUCKET).createSignedUrls(chunk, URL_TTL);
     if (error) throw error;
     (data || []).forEach((d) => { if (d.signedUrl) urlCache.set(d.path, d.signedUrl); });
-  }
+  }));
 }
 
 function originalUrl(path) {
