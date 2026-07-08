@@ -178,6 +178,7 @@ function renderLogin(errorMsg = '') {
     }
     session = res.data.session;
     applySessionUi();
+    playIntro = true;
     route();
   });
 }
@@ -230,6 +231,8 @@ async function route() {
 
 /* ---------------- home ---------------- */
 
+let playIntro = false;
+
 async function renderHome() {
   app.innerHTML = `
     <section class="hero">
@@ -237,10 +240,17 @@ async function renderHome() {
       <h1 class="hero-script">Nathalie <em>&amp;</em> Leon</h1>
       <p class="hero-sub">Alle Momente unseres schönsten Tages – von euch allen festgehalten. Schaut euch die Bilder an, ladet eure eigenen hoch und nehmt eure Lieblingsmomente mit nach Hause.</p>
       <div class="hero-divider" aria-hidden="true"><span></span></div>
+      <p class="home-stats" id="home-stats"></p>
     </section>
     <section class="album-grid" id="album-grid">
       ${'<div class="skeleton"></div>'.repeat(2)}
     </section>`;
+
+  if (playIntro) {
+    playIntro = false;
+    document.body.classList.add('intro');
+    setTimeout(() => document.body.classList.remove('intro'), 4200);
+  }
 
   const albums = await fetchAlbums(true);
   const grid = document.getElementById('album-grid');
@@ -261,26 +271,36 @@ async function renderHome() {
       </div>
     </a>`).join('');
 
-  albums.forEach(async (a) => {
+  const perAlbum = await Promise.all(albums.map(async (a) => {
     const card = grid.querySelector(`[data-slug="${CSS.escape(a.slug)}"]`);
-    if (!card) return;
     try {
       const files = await listAlbumFiles(a.slug);
-      card.querySelector('[data-count]').textContent =
-        files.length === 1 ? '1 Datei' : `${files.length} Dateien`;
-      const cover = files.find((f) => !f.video) || files[0] || null;
-      if (cover) {
-        await signPaths([cover.path, thumbPathOf(cover.path)]);
-        const img = new Image();
-        img.className = 'album-cover';
-        img.alt = '';
-        const pre = preThumb(cover.path);
-        img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = originalUrl(cover.path); };
-        img.src = pre || await thumbUrl(cover.path, 800);
-        card.insertBefore(img, card.querySelector('.album-meta'));
+      if (card) {
+        card.querySelector('[data-count]').textContent =
+          files.length === 1 ? '1 Datei' : `${files.length} Dateien`;
+        const cover = files.find((f) => !f.video) || files[0] || null;
+        if (cover) {
+          await signPaths([cover.path, thumbPathOf(cover.path)]);
+          const img = new Image();
+          img.className = 'album-cover';
+          img.alt = '';
+          const pre = preThumb(cover.path);
+          img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = originalUrl(cover.path); };
+          img.src = pre || await thumbUrl(cover.path, 800);
+          card.insertBefore(img, card.querySelector('.album-meta'));
+        }
       }
-    } catch { /* Zähler bleibt "…" */ }
-  });
+      return files;
+    } catch { return []; }
+  }));
+
+  // Zähler: „374 Momente · 21 Filme · 1 unvergesslicher Tag"
+  const all = perAlbum.flat();
+  const nVideo = all.filter((f) => f.video).length;
+  const stats = document.getElementById('home-stats');
+  if (stats && all.length) {
+    stats.textContent = `${all.length - nVideo} Momente · ${nVideo} Filme · 1 unvergesslicher Tag`;
+  }
 }
 
 /* ---------------- album ---------------- */
@@ -310,6 +330,10 @@ async function renderAlbum(slug) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0L8 8m4-4l4 4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Fotos hochladen</span>
         </button>` : ''}
+        <button class="btn" id="btn-slideshow" type="button" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 5.5v13l11-6.5z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Diashow</span>
+        </button>
         <button class="btn btn-gold" id="btn-download-all" type="button" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Alle herunterladen</span>
@@ -325,6 +349,10 @@ async function renderAlbum(slug) {
     ${uploadAllowed ? `
     <div class="upload-zone" id="upload-zone" hidden>
       <p>Dateien hierher ziehen oder auswählen – Fotos und Videos, gerne in voller Auflösung.</p>
+      <div class="note-fields">
+        <input id="up-author" type="text" placeholder="Dein Name (optional)" maxlength="60" autocomplete="off">
+        <input id="up-message" type="text" placeholder="Eine Nachricht oder Anekdote zu euren Fotos (optional)" maxlength="500" autocomplete="off">
+      </div>
       <button class="btn btn-gold" id="btn-pick" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 3-3 6 6"/></svg>
         <span>Dateien auswählen</span>
@@ -355,14 +383,33 @@ async function renderAlbum(slug) {
 
 let albumFiles = [];
 let activeFilter = 'all';
+let currentSlug = null;
+let notesByPath = new Map(); // path -> [{author, message}]
+
+async function fetchNotes(slug) {
+  notesByPath = new Map();
+  const { data, error } = await supabase
+    .from('photo_notes')
+    .select('path, author, message, created_at')
+    .eq('slug', slug)
+    .order('created_at', { ascending: true });
+  if (error) { console.error(error); return; }
+  (data || []).forEach((n) => {
+    if (!notesByPath.has(n.path)) notesByPath.set(n.path, []);
+    notesByPath.get(n.path).push(n);
+  });
+}
 
 async function loadAlbumGrid(slug) {
+  currentSlug = slug;
   const sub = document.getElementById('album-sub');
+  const notesReady = fetchNotes(slug);
   const files = await listAlbumFiles(slug);
   await signPaths([
     ...files.map((f) => f.path),
     ...files.map((f) => thumbPathOf(f.path)),
   ]);
+  await notesReady;
   albumFiles = files;
 
   const total = files.reduce((s, f) => s + f.size, 0);
@@ -401,6 +448,15 @@ async function loadAlbumGrid(slug) {
   if (dlBtn && !dlBtn._wired) {
     dlBtn._wired = true;
     dlBtn.addEventListener('click', () => downloadAll(slug));
+  }
+
+  const ssBtn = document.getElementById('btn-slideshow');
+  if (ssBtn) {
+    ssBtn.disabled = !files.some((f) => !f.video);
+    if (!ssBtn._wired) {
+      ssBtn._wired = true;
+      ssBtn.addEventListener('click', startSlideshow);
+    }
   }
 }
 
@@ -585,6 +641,7 @@ async function uploadFiles(slug, files) {
   });
 
   let ok = 0, fail = 0;
+  const uploadedPaths = [];
   for (let i = 0; i < valid.length; i++) {
     const f = valid[i];
     const bar = rows[i].querySelector('.up-bar > i');
@@ -596,6 +653,7 @@ async function uploadFiles(slug, files) {
       bar.style.width = '100%';
       status.innerHTML = `<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
       ok++;
+      uploadedPaths.push(path);
       try {
         const tb = await makeThumb(f);
         if (tb) await uploadOne(`thumbs/${path}.jpg`, new File([tb], 'thumb.jpg', { type: 'image/jpeg' }), () => {});
@@ -605,6 +663,16 @@ async function uploadFiles(slug, files) {
       status.innerHTML = `<svg class="fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>`;
       fail++;
     }
+  }
+
+  // Optionale Gästebuch-Nachricht an die hochgeladenen Fotos hängen
+  const author = document.getElementById('up-author')?.value.trim() || '';
+  const message = document.getElementById('up-message')?.value.trim() || '';
+  if (message && uploadedPaths.length) {
+    const { error } = await supabase.from('photo_notes').insert(
+      uploadedPaths.map((p) => ({ slug, path: p, author, message }))
+    );
+    if (error) console.error(error);
   }
 
   toast(fail
@@ -677,36 +745,132 @@ function openLightbox(index) {
 }
 
 function closeLightbox() {
+  stopSlideshow();
   if (lightbox.hidden) return;
   lightbox.hidden = true;
   lbStage.innerHTML = '';
+  document.getElementById('lb-notes').hidden = true;
   document.body.style.overflow = '';
 }
 
-function renderLightbox() {
+function renderLightbox(crossfade = false) {
   const f = currentMedia[lbIndex];
   if (!f) return;
   lbCounter.textContent = `${lbIndex + 1} / ${currentMedia.length}`;
-  lbStage.innerHTML = '';
 
   if (f.video) {
+    lbStage.innerHTML = '';
     const v = document.createElement('video');
     v.src = originalUrl(f.path);
     v.controls = true;
     v.autoplay = true;
     v.playsInline = true;
     lbStage.appendChild(v);
+  } else if (crossfade && lbStage.firstElementChild) {
+    // Diashow: neues Bild über dem alten einblenden
+    const old = lbStage.firstElementChild;
+    const img = new Image();
+    img.alt = f.name;
+    img.className = 'ss-next';
+    img.onload = () => {
+      lbStage.appendChild(img);
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        img.classList.add('ss-visible');
+        setTimeout(() => old.remove(), 1100);
+      }));
+    };
+    img.src = originalUrl(f.path);
   } else {
+    lbStage.innerHTML = '';
     const img = new Image();
     img.alt = f.name;
     img.src = originalUrl(f.path); // volle Original-Auflösung
     lbStage.appendChild(img);
   }
 
+  renderNotes(f);
+
   [lbIndex - 1, lbIndex + 1].forEach((i) => {
     const n = currentMedia[i];
     if (n && !n.video) { const pre = new Image(); pre.src = originalUrl(n.path); }
   });
+}
+
+/* ---------------- Gästebuch (Notizen pro Foto) ---------------- */
+
+const lbNotes = document.getElementById('lb-notes');
+const lbNotesList = document.getElementById('lb-notes-list');
+const lbNotesBtn = document.getElementById('lb-notes-btn');
+const lbNoteForm = document.getElementById('lb-note-form');
+
+function renderNotes(f) {
+  const notes = notesByPath.get(f.path) || [];
+  document.getElementById('lb-notes-count').textContent = notes.length;
+  lbNotesBtn.classList.toggle('has-notes', notes.length > 0);
+  lbNotesList.innerHTML = notes.length
+    ? notes.map((n) => `
+        <div class="lb-note">
+          <p class="lb-note-msg">„${esc(n.message)}"</p>
+          ${n.author ? `<p class="lb-note-author">— ${esc(n.author)}</p>` : ''}
+        </div>`).join('')
+    : '<p class="lb-note-empty">Noch keine Nachricht zu diesem Moment – hinterlasse die erste!</p>';
+}
+
+lbNotesBtn.addEventListener('click', () => {
+  lbNotes.hidden = !lbNotes.hidden;
+});
+
+lbNoteForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const f = currentMedia[lbIndex];
+  if (!f) return;
+  const author = lbNoteForm.author.value.trim();
+  const message = lbNoteForm.message.value.trim();
+  if (!message) return;
+  const btn = lbNoteForm.querySelector('[type="submit"]');
+  btn.disabled = true;
+  const { error } = await supabase.from('photo_notes')
+    .insert({ slug: currentSlug, path: f.path, author, message });
+  btn.disabled = false;
+  if (error) { toast('Nachricht konnte nicht gespeichert werden.'); return; }
+  if (!notesByPath.has(f.path)) notesByPath.set(f.path, []);
+  notesByPath.get(f.path).push({ author, message });
+  lbNoteForm.message.value = '';
+  renderNotes(f);
+  toast('Danke für deine Nachricht!');
+});
+
+/* ---------------- Diashow ---------------- */
+
+let ssTimer = null;
+const SS_INTERVAL = 5000;
+
+function slideshowAdvance() {
+  const photos = currentMedia.map((f, i) => ({ f, i })).filter((x) => !x.f.video);
+  if (photos.length < 2) return;
+  const pos = photos.findIndex((x) => x.i === lbIndex);
+  lbIndex = photos[(pos + 1) % photos.length].i;
+  renderLightbox(true);
+  // nächstes Foto vorladen
+  const next = photos[(pos + 2) % photos.length];
+  if (next) { const pre = new Image(); pre.src = originalUrl(next.f.path); }
+}
+
+function startSlideshow() {
+  const photos = currentMedia.map((f, i) => ({ f, i })).filter((x) => !x.f.video);
+  if (!photos.length) return;
+  lightbox.classList.add('slideshow');
+  openLightbox(photos[0].i);
+  lightbox.requestFullscreen?.().catch(() => {});
+  ssTimer = setInterval(slideshowAdvance, SS_INTERVAL);
+}
+
+function stopSlideshow() {
+  if (!ssTimer) return;
+  clearInterval(ssTimer);
+  ssTimer = null;
+  lightbox.classList.remove('slideshow');
+  if (document.fullscreenElement) document.exitFullscreen?.().catch(() => {});
 }
 
 function lbStep(dir) {

@@ -56,8 +56,20 @@
     <button class="lb-btn lb-next" aria-label="Nächstes Bild">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
     </button>
+    <div id="lb-notes" class="lb-notes" hidden>
+      <div id="lb-notes-list" class="lb-notes-list"></div>
+      <form id="lb-note-form" class="lb-note-form">
+        <input name="author" type="text" placeholder="Dein Name (optional)" maxlength="60" autocomplete="off">
+        <textarea name="message" placeholder="Eure Nachricht oder Anekdote zu diesem Moment …" maxlength="500" rows="2" required></textarea>
+        <button class="btn btn-gold btn-sm" type="submit">Hinterlassen</button>
+      </form>
+    </div>
     <div class="lb-bottom glass">
       <span id="lb-counter" class="lb-counter">1 / 1</span>
+      <button id="lb-notes-btn" class="btn btn-sm lb-notes-toggle" type="button" aria-label="Nachrichten zu diesem Foto">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M21 12a8 8 0 0 1-8 8H4l2.2-2.6A8 8 0 1 1 21 12z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span id="lb-notes-count">0</span>
+      </button>
       <button id="lb-download" class="btn btn-gold btn-sm" type="button">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Download</span>
