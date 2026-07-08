@@ -270,6 +270,7 @@ function canUploadTo(slug) {
 }
 
 async function renderAlbum(slug) {
+  activeFilter = 'all';
   const albums = await fetchAlbums();
   const album = albums.find((a) => a.slug === slug);
   if (!album) { location.hash = '#/'; return; }
@@ -294,6 +295,11 @@ async function renderAlbum(slug) {
         </button>
       </div>
       <p class="head-sub" id="album-sub">Wird geladen …</p>
+      <div class="filter-bar" id="filter-bar" hidden>
+        <button class="chip active" data-filter="all" type="button">Alle <i></i></button>
+        <button class="chip" data-filter="photo" type="button">Fotos <i></i></button>
+        <button class="chip" data-filter="video" type="button">Videos <i></i></button>
+      </div>
     </div>
     ${uploadAllowed ? `
     <div class="upload-zone" id="upload-zone" hidden>
@@ -326,15 +332,17 @@ async function renderAlbum(slug) {
   await loadAlbumGrid(slug);
 }
 
+let albumFiles = [];
+let activeFilter = 'all';
+
 async function loadAlbumGrid(slug) {
-  const grid = document.getElementById('photo-grid');
   const sub = document.getElementById('album-sub');
   const files = await listAlbumFiles(slug);
   await signPaths([
     ...files.map((f) => f.path),
     ...files.map((f) => thumbPathOf(f.path)),
   ]);
-  currentMedia = files;
+  albumFiles = files;
 
   const total = files.reduce((s, f) => s + f.size, 0);
   if (sub) sub.textContent = files.length
@@ -344,9 +352,50 @@ async function loadAlbumGrid(slug) {
   const dlAll = document.getElementById('btn-download-all');
   if (dlAll) dlAll.disabled = !files.length;
 
+  // Filterleiste: Zähler setzen + einmalig verdrahten
+  const bar = document.getElementById('filter-bar');
+  if (bar) {
+    const nVideo = files.filter((f) => f.video).length;
+    const counts = { all: files.length, photo: files.length - nVideo, video: nVideo };
+    bar.querySelectorAll('.chip').forEach((c) => {
+      c.querySelector('i').textContent = counts[c.dataset.filter];
+      c.classList.toggle('active', c.dataset.filter === activeFilter);
+    });
+    bar.hidden = !files.length;
+    if (!bar._wired) {
+      bar._wired = true;
+      bar.addEventListener('click', (e) => {
+        const chip = e.target.closest('.chip');
+        if (!chip) return;
+        activeFilter = chip.dataset.filter;
+        bar.querySelectorAll('.chip').forEach((c) => c.classList.toggle('active', c === chip));
+        renderGrid();
+      });
+    }
+  }
+
+  renderGrid();
+
+  const dlBtn = document.getElementById('btn-download-all');
+  if (dlBtn && !dlBtn._wired) {
+    dlBtn._wired = true;
+    dlBtn.addEventListener('click', () => downloadAll(slug));
+  }
+}
+
+function renderGrid() {
+  const grid = document.getElementById('photo-grid');
+  if (!grid) return;
+  const files = activeFilter === 'all'
+    ? albumFiles
+    : albumFiles.filter((f) => (activeFilter === 'video' ? f.video : !f.video));
+  currentMedia = files;
+
   if (!files.length) {
     grid.innerHTML = `<div class="state-box" style="grid-column:1/-1">
-      <p>Dieses Album wartet noch auf seine ersten Momente.</p>
+      <p>${activeFilter === 'video' ? 'Keine Videos in diesem Album.'
+        : activeFilter === 'photo' ? 'Keine Fotos in diesem Album.'
+        : 'Dieses Album wartet noch auf seine ersten Momente.'}</p>
     </div>`;
     return;
   }
@@ -358,10 +407,13 @@ async function loadAlbumGrid(slug) {
         : ''}
     </button>`).join('');
 
-  grid.addEventListener('click', (e) => {
-    const tile = e.target.closest('.photo-tile');
-    if (tile) openLightbox(Number(tile.dataset.index));
-  });
+  if (!grid._wired) {
+    grid._wired = true;
+    grid.addEventListener('click', (e) => {
+      const tile = e.target.closest('.photo-tile');
+      if (tile) openLightbox(Number(tile.dataset.index));
+    });
+  }
 
   const io = new IntersectionObserver((entries) => {
     entries.forEach(async (entry) => {
@@ -405,12 +457,6 @@ async function loadAlbumGrid(slug) {
   }, { rootMargin: '600px' });
 
   grid.querySelectorAll('.photo-tile').forEach((t) => io.observe(t));
-
-  const dlBtn = document.getElementById('btn-download-all');
-  if (dlBtn && !dlBtn._wired) {
-    dlBtn._wired = true;
-    dlBtn.addEventListener('click', () => downloadAll(slug));
-  }
 }
 
 /* ---------------- upload ---------------- */
