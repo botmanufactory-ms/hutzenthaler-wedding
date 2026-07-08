@@ -39,3 +39,12 @@ where email = 'admin@hochzeit.local';
 update app_settings set value = extensions.crypt('NEUES_PASSWORT', extensions.gen_salt('bf'))
 where key = 'admin_pin_hash';
 ```
+
+## Deployment (Netlify)
+
+```bash
+rm -rf dist && mkdir dist && cp index.html styles.css app.js dist/
+netlify deploy --prod --dir dist
+```
+
+Live: https://hutzenthaler-wedding.netlify.app
