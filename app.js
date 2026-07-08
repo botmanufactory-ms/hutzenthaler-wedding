@@ -111,10 +111,12 @@ async function listAlbumFiles(slug) {
   const pageSize = 1000;
   let offset = 0;
   for (;;) {
+    // Chronologisch: die nummerierten Originale erzählen den Tag von Anfang bis
+    // Ende, neue Gäste-Uploads (Zeitstempel-Präfix) reihen sich hinten ein.
     const { data, error } = await supabase.storage.from(BUCKET).list(slug, {
       limit: pageSize,
       offset,
-      sortBy: { column: 'created_at', order: 'desc' },
+      sortBy: { column: 'name', order: 'asc' },
     });
     if (error) throw error;
     const batch = (data || []).filter((f) => f.id && (isImage(f.name) || isVideo(f.name)));
@@ -419,8 +421,16 @@ function renderGrid() {
     return;
   }
 
+  // Editoriales Mosaik: wiederkehrendes Muster aus großen, breiten und hohen Kacheln
+  const tileClass = (i) => {
+    if (i % 14 === 0) return ' tile-xl';
+    if (i % 14 === 5) return ' tile-wide';
+    if (i % 14 === 9) return ' tile-tall';
+    return '';
+  };
+
   grid.innerHTML = files.map((f, i) => `
-    <button class="photo-tile" data-index="${i}" type="button" aria-label="${esc(f.name)} öffnen">
+    <button class="photo-tile${tileClass(i)}" data-index="${i}" type="button" aria-label="${esc(f.name)} öffnen">
       ${f.video
         ? `<span class="tile-badge"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg></span>`
         : ''}
