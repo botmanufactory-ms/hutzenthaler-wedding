@@ -25,10 +25,15 @@
       </svg>
       <span class="brand-name">Hutzenthaler</span>
     </a>
-    <button id="btn-new-album" class="btn btn-ghost" type="button">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
-      <span>Neues Album</span>
-    </button>
+    <div class="topbar-actions">
+      <button id="btn-new-album" class="btn btn-ghost" type="button" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke-linecap="round"/></svg>
+        <span>Neues Album</span>
+      </button>
+      <button id="btn-logout" class="btn btn-ghost" type="button" hidden aria-label="Abmelden" title="Abmelden">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
   </header>
 
   <main id="app">
@@ -66,8 +71,8 @@
       <h3>Neues Album anlegen</h3>
       <label for="album-name">Albumname</label>
       <input id="album-name" name="name" type="text" required maxlength="60" placeholder="z. B. Standesamt" autocomplete="off">
-      <label for="album-pin">Admin-PIN</label>
-      <input id="album-pin" name="pin" type="password" required placeholder="PIN eingeben" autocomplete="off">
+      <label for="album-pin">Admin-Passwort</label>
+      <input id="album-pin" name="pin" type="password" required placeholder="Admin-Passwort eingeben" autocomplete="off">
       <p id="album-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions">
         <button type="button" class="btn btn-ghost" data-close>Abbrechen</button>

@@ -1,11 +1,17 @@
 /* Hutzenthaler Wedding – Foto-Portal
-   Vanilla JS + Supabase (Storage + RPC) */
+   Vanilla JS + Supabase (Auth + Storage + RPC)
+   Zugriff nur mit Passwort: Gast oder Admin (gemeinsames Konto-Modell). */
 
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
 const SUPABASE_URL = 'https://ttlvnxjlorejwntxxxzt.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0bHZueGpsb3JlandudHh4eHp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0NjM5MjgsImV4cCI6MjA5OTAzOTkyOH0.B9OtpkmV7qNs6CK0EVzRNJcPtzBHNrj9NwN4repfXlI';
 const BUCKET = 'wedding';
+const ADMIN_EMAIL = 'admin@hochzeit.local';
+const GUEST_EMAIL = 'gast@hochzeit.local';
+const GUEST_UPLOAD_SLUG = 'gaesteupload';
+const NO_UPLOAD_SLUGS = ['fotobox'];
+const URL_TTL = 60 * 60 * 24; // signierte URLs: 24h
 
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
@@ -14,14 +20,19 @@ const lightbox = document.getElementById('lightbox');
 const lbStage = document.getElementById('lb-stage');
 const lbCounter = document.getElementById('lb-counter');
 const lbDownload = document.getElementById('lb-download');
+const btnNewAlbum = document.getElementById('btn-new-album');
+const btnLogout = document.getElementById('btn-logout');
 
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'heic'];
 const VIDEO_EXT = ['mp4', 'mov', 'webm', 'm4v'];
 
+let session = null;
+let isAdmin = false;
 let albumsCache = null;
 let currentMedia = [];
 let lbIndex = 0;
 let transformsBroken = false;
+const urlCache = new Map(); // path bzw. path#w<width> -> signierte URL
 
 /* ---------------- helpers ---------------- */
 
@@ -32,14 +43,6 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({
 const extOf = (name) => name.split('.').pop().toLowerCase();
 const isImage = (name) => IMAGE_EXT.includes(extOf(name));
 const isVideo = (name) => VIDEO_EXT.includes(extOf(name));
-
-const publicUrl = (path) =>
-  `${SUPABASE_URL}/storage/v1/object/public/${BUCKET}/${encodeURIComponent(path).replace(/%2F/g, '/')}`;
-
-const thumbUrl = (path, width = 640) => {
-  if (transformsBroken || !isImage(path)) return publicUrl(path);
-  return `${SUPABASE_URL}/storage/v1/render/image/public/${BUCKET}/${encodeURIComponent(path).replace(/%2F/g, '/')}?width=${width}&quality=78&resize=contain`;
-};
 
 function toast(msg, ms = 3500) {
   const el = document.getElementById('toast');
@@ -57,7 +60,34 @@ function fmtBytes(n) {
   return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${u[i]}`;
 }
 
-/* ---------------- data ---------------- */
+/* ---------------- signierte URLs ---------------- */
+
+async function signPaths(paths) {
+  const missing = [...new Set(paths)].filter((p) => !urlCache.has(p));
+  for (let i = 0; i < missing.length; i += 100) {
+    const chunk = missing.slice(i, i + 100);
+    const { data, error } = await supabase.storage.from(BUCKET).createSignedUrls(chunk, URL_TTL);
+    if (error) throw error;
+    (data || []).forEach((d) => { if (d.signedUrl) urlCache.set(d.path, d.signedUrl); });
+  }
+}
+
+function originalUrl(path) {
+  return urlCache.get(path);
+}
+
+async function thumbUrl(path, width) {
+  if (transformsBroken || !isImage(path)) return originalUrl(path);
+  const key = `${path}#w${width}`;
+  if (urlCache.has(key)) return urlCache.get(key);
+  const { data, error } = await supabase.storage.from(BUCKET)
+    .createSignedUrl(path, URL_TTL, { transform: { width, quality: 78 } });
+  if (error || !data?.signedUrl) return originalUrl(path);
+  urlCache.set(key, data.signedUrl);
+  return data.signedUrl;
+}
+
+/* ---------------- daten ---------------- */
 
 async function fetchAlbums(force = false) {
   if (albumsCache && !force) return albumsCache;
@@ -95,12 +125,72 @@ async function listAlbumFiles(slug) {
   }));
 }
 
+/* ---------------- auth / login ---------------- */
+
+function applySessionUi() {
+  isAdmin = session?.user?.email === ADMIN_EMAIL;
+  btnNewAlbum.hidden = !isAdmin;
+  btnLogout.hidden = !session;
+}
+
+function renderLogin(errorMsg = '') {
+  btnNewAlbum.hidden = true;
+  btnLogout.hidden = true;
+  app.innerHTML = `
+    <section class="hero" style="padding-bottom:12px">
+      <h1 class="hero-script">Nathalie &amp; Leon</h1>
+      <p class="hero-sub">05. Juni 2026 · Das Fotoalbum unserer Hochzeit</p>
+      <div class="hero-divider">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21C12 21 4 13.9 4 8.9C4 6.2 6.2 4 8.9 4C10.2 4 11.4 4.6 12 5.5C12.6 4.6 13.8 4 15.1 4C17.8 4 20 6.2 20 8.9C20 13.9 12 21 12 21Z"/></svg>
+      </div>
+    </section>
+    <form class="login-card glass" id="login-form">
+      <label for="login-pw">Passwort</label>
+      <input id="login-pw" type="password" placeholder="Passwort von der Einladung" autocomplete="current-password" required autofocus>
+      <p class="form-error" id="login-error" role="alert" ${errorMsg ? '' : 'hidden'}>${esc(errorMsg)}</p>
+      <button class="btn btn-gold" type="submit" style="width:100%;justify-content:center">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+        <span>Eintreten</span>
+      </button>
+    </form>`;
+
+  document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const pw = document.getElementById('login-pw').value;
+    const err = document.getElementById('login-error');
+    const btn = e.target.querySelector('button');
+    btn.disabled = true;
+    err.hidden = true;
+    let res = await supabase.auth.signInWithPassword({ email: ADMIN_EMAIL, password: pw });
+    if (res.error) res = await supabase.auth.signInWithPassword({ email: GUEST_EMAIL, password: pw });
+    btn.disabled = false;
+    if (res.error) {
+      err.textContent = 'Falsches Passwort – bitte erneut versuchen.';
+      err.hidden = false;
+      return;
+    }
+    session = res.data.session;
+    applySessionUi();
+    route();
+  });
+}
+
+btnLogout.addEventListener('click', async () => {
+  await supabase.auth.signOut();
+  session = null;
+  albumsCache = null;
+  urlCache.clear();
+  applySessionUi();
+  renderLogin();
+});
+
 /* ---------------- router ---------------- */
 
 window.addEventListener('hashchange', route);
 
 async function route() {
   closeLightbox();
+  if (!session) { renderLogin(); return; }
   const hash = location.hash || '#/';
   const m = hash.match(/^#\/album\/([^/]+)/);
   try {
@@ -132,7 +222,7 @@ async function renderHome() {
   const grid = document.getElementById('album-grid');
 
   if (!albums.length) {
-    grid.outerHTML = `<div class="state-box"><p>Noch keine Alben vorhanden. Lege über „Neues Album" das erste an.</p></div>`;
+    grid.outerHTML = `<div class="state-box"><p>Noch keine Alben vorhanden.</p></div>`;
     return;
   }
 
@@ -147,7 +237,6 @@ async function renderHome() {
       </div>
     </a>`).join('');
 
-  // covers + counts, loaded per album in parallel
   albums.forEach(async (a) => {
     const card = grid.querySelector(`[data-slug="${CSS.escape(a.slug)}"]`);
     if (!card) return;
@@ -155,26 +244,33 @@ async function renderHome() {
       const files = await listAlbumFiles(a.slug);
       card.querySelector('[data-count]').textContent =
         files.length === 1 ? '1 Datei' : `${files.length} Dateien`;
-      const cover = files.find((f) => !f.video) || files[0];
-      if (cover && !cover.video) {
+      const cover = files.find((f) => !f.video) || null;
+      if (cover) {
+        await signPaths([cover.path]);
         const img = new Image();
         img.className = 'album-cover';
         img.alt = '';
         img.loading = 'lazy';
-        img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = publicUrl(cover.path); };
-        img.src = thumbUrl(cover.path, 800);
+        img.onerror = () => { transformsBroken = true; img.onerror = null; img.src = originalUrl(cover.path); };
+        img.src = await thumbUrl(cover.path, 800);
         card.insertBefore(img, card.querySelector('.album-meta'));
       }
-    } catch { /* count stays "…" */ }
+    } catch { /* Zähler bleibt "…" */ }
   });
 }
 
 /* ---------------- album ---------------- */
 
+function canUploadTo(slug) {
+  if (NO_UPLOAD_SLUGS.includes(slug)) return false;
+  return isAdmin || slug === GUEST_UPLOAD_SLUG;
+}
+
 async function renderAlbum(slug) {
   const albums = await fetchAlbums();
   const album = albums.find((a) => a.slug === slug);
   if (!album) { location.hash = '#/'; return; }
+  const uploadAllowed = canUploadTo(slug);
 
   app.innerHTML = `
     <a class="breadcrumb" href="#/">
@@ -184,10 +280,11 @@ async function renderAlbum(slug) {
     <div class="album-head glass">
       <h2>${esc(album.name)}</h2>
       <div class="head-actions">
+        ${uploadAllowed ? `
         <button class="btn" id="btn-upload" type="button">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 16V4m0 0L8 8m4-4l4 4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Fotos hochladen</span>
-        </button>
+        </button>` : ''}
         <button class="btn btn-gold" id="btn-download-all" type="button" disabled>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 4v12m0 0l-4-4m4 4l4-4M5 20h14" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <span>Alle herunterladen</span>
@@ -195,6 +292,7 @@ async function renderAlbum(slug) {
       </div>
       <p class="head-sub" id="album-sub">Wird geladen …</p>
     </div>
+    ${uploadAllowed ? `
     <div class="upload-zone" id="upload-zone" hidden>
       <p>Dateien hierher ziehen oder auswählen – Fotos und Videos, gerne in voller Auflösung.</p>
       <button class="btn btn-gold" id="btn-pick" type="button">
@@ -203,22 +301,24 @@ async function renderAlbum(slug) {
       </button>
       <input type="file" id="file-input" multiple accept="image/*,video/*" hidden>
       <div class="upload-progress" id="upload-progress"></div>
-    </div>
+    </div>` : ''}
     <div class="photo-grid" id="photo-grid">
       ${'<div class="skeleton"></div>'.repeat(12)}
     </div>`;
 
-  const zone = document.getElementById('upload-zone');
-  const input = document.getElementById('file-input');
-  document.getElementById('btn-upload').addEventListener('click', () => {
-    zone.hidden = !zone.hidden;
-    if (!zone.hidden) zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  });
-  document.getElementById('btn-pick').addEventListener('click', () => input.click());
-  input.addEventListener('change', () => uploadFiles(slug, [...input.files]));
-  ['dragover', 'dragenter'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragover'); }));
-  ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragover'); }));
-  zone.addEventListener('drop', (e) => uploadFiles(slug, [...e.dataTransfer.files]));
+  if (uploadAllowed) {
+    const zone = document.getElementById('upload-zone');
+    const input = document.getElementById('file-input');
+    document.getElementById('btn-upload').addEventListener('click', () => {
+      zone.hidden = !zone.hidden;
+      if (!zone.hidden) zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    });
+    document.getElementById('btn-pick').addEventListener('click', () => input.click());
+    input.addEventListener('change', () => uploadFiles(slug, [...input.files]));
+    ['dragover', 'dragenter'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragover'); }));
+    ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragover'); }));
+    zone.addEventListener('drop', (e) => uploadFiles(slug, [...e.dataTransfer.files]));
+  }
 
   await loadAlbumGrid(slug);
 }
@@ -227,6 +327,7 @@ async function loadAlbumGrid(slug) {
   const grid = document.getElementById('photo-grid');
   const sub = document.getElementById('album-sub');
   const files = await listAlbumFiles(slug);
+  await signPaths(files.map((f) => f.path));
   currentMedia = files;
 
   const total = files.reduce((s, f) => s + f.size, 0);
@@ -256,9 +357,8 @@ async function loadAlbumGrid(slug) {
     if (tile) openLightbox(Number(tile.dataset.index));
   });
 
-  // Lazy-load media into tiles
   const io = new IntersectionObserver((entries) => {
-    entries.forEach((entry) => {
+    entries.forEach(async (entry) => {
       if (!entry.isIntersecting) return;
       const tile = entry.target;
       io.unobserve(tile);
@@ -269,7 +369,7 @@ async function loadAlbumGrid(slug) {
         v.muted = true;
         v.playsInline = true;
         v.preload = 'metadata';
-        v.src = publicUrl(f.path) + '#t=0.5';
+        v.src = originalUrl(f.path) + '#t=0.5';
         v.addEventListener('loadeddata', () => v.classList.add('loaded'), { once: true });
         tile.prepend(v);
       } else {
@@ -280,9 +380,9 @@ async function loadAlbumGrid(slug) {
         img.onerror = () => {
           transformsBroken = true;
           img.onerror = null;
-          img.src = publicUrl(f.path);
+          img.src = originalUrl(f.path);
         };
-        img.src = thumbUrl(f.path, 640);
+        img.src = await thumbUrl(f.path, 640);
         tile.prepend(img);
       }
     });
@@ -311,11 +411,13 @@ function sanitizeFileName(name) {
   return `${base}.${ext}`;
 }
 
-function uploadOne(path, file, onProgress) {
+async function uploadOne(path, file, onProgress) {
+  const { data: { session: s } } = await supabase.auth.getSession();
+  if (!s) throw new Error('Nicht eingeloggt');
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`);
-    xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON_KEY}`);
+    xhr.setRequestHeader('Authorization', `Bearer ${s.access_token}`);
     xhr.setRequestHeader('apikey', SUPABASE_ANON_KEY);
     xhr.setRequestHeader('x-upsert', 'false');
     xhr.setRequestHeader('cache-control', 'max-age=31536000');
@@ -332,6 +434,7 @@ function uploadOne(path, file, onProgress) {
 }
 
 async function uploadFiles(slug, files) {
+  if (!canUploadTo(slug)) { toast('In dieses Album kann nicht hochgeladen werden.'); return; }
   const valid = files.filter((f) => isImage(f.name) || isVideo(f.name) || f.type.startsWith('image/') || f.type.startsWith('video/'));
   if (!valid.length) { toast('Bitte nur Fotos oder Videos hochladen.'); return; }
 
@@ -405,7 +508,7 @@ async function downloadAll(slug) {
     const zip = new JSZip();
     for (let i = 0; i < files.length; i++) {
       label.textContent = `Lade ${i + 1} / ${files.length} …`;
-      const res = await fetch(publicUrl(files[i].path));
+      const res = await fetch(originalUrl(files[i].path));
       if (!res.ok) continue;
       zip.file(files[i].name, await res.blob(), { compression: 'STORE' });
     }
@@ -451,7 +554,7 @@ function renderLightbox() {
 
   if (f.video) {
     const v = document.createElement('video');
-    v.src = publicUrl(f.path);
+    v.src = originalUrl(f.path);
     v.controls = true;
     v.autoplay = true;
     v.playsInline = true;
@@ -459,14 +562,13 @@ function renderLightbox() {
   } else {
     const img = new Image();
     img.alt = f.name;
-    img.src = publicUrl(f.path); // volle Original-Auflösung
+    img.src = originalUrl(f.path); // volle Original-Auflösung
     lbStage.appendChild(img);
   }
 
-  // Nachbarn vorladen
   [lbIndex - 1, lbIndex + 1].forEach((i) => {
     const n = currentMedia[i];
-    if (n && !n.video) { const pre = new Image(); pre.src = publicUrl(n.path); }
+    if (n && !n.video) { const pre = new Image(); pre.src = originalUrl(n.path); }
   });
 }
 
@@ -484,7 +586,7 @@ lbDownload.addEventListener('click', async () => {
   const f = currentMedia[lbIndex];
   if (!f) return;
   lbDownload.disabled = true;
-  try { await downloadBlob(publicUrl(f.path), f.name); }
+  try { await downloadBlob(originalUrl(f.path), f.name); }
   catch { toast('Download fehlgeschlagen.'); }
   finally { lbDownload.disabled = false; }
 });
@@ -496,7 +598,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') lbStep(1);
 });
 
-// Touch-Swipe im Lightbox
 let touchX = null;
 lbStage.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
 lbStage.addEventListener('touchend', (e) => {
@@ -512,7 +613,7 @@ const dlg = document.getElementById('dlg-album');
 const form = document.getElementById('form-album');
 const albumError = document.getElementById('album-error');
 
-document.getElementById('btn-new-album').addEventListener('click', () => {
+btnNewAlbum.addEventListener('click', () => {
   form.reset();
   albumError.hidden = true;
   dlg.showModal();
@@ -547,4 +648,10 @@ form.addEventListener('submit', async (e) => {
 });
 
 /* ---------------- start ---------------- */
-route();
+
+(async () => {
+  const { data } = await supabase.auth.getSession();
+  session = data.session;
+  applySessionUi();
+  route();
+})();

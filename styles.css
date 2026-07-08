@@ -441,6 +441,30 @@ main {
 }
 @keyframes toast-in { from { opacity: 0; translate: -50% 12px; } to { opacity: 1; translate: -50% 0; } }
 
+/* ----- login ----- */
+.topbar-actions { display: flex; gap: 10px; }
+.login-card {
+  max-width: 400px;
+  margin: 8px auto 40px;
+  padding: 30px;
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: 8px;
+}
+.login-card label { color: var(--text-muted); font-size: 0.95rem; }
+.login-card input {
+  min-height: 46px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 1.1rem;
+}
+.login-card input:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+.login-card .btn { margin-top: 10px; }
+
 /* ----- footer ----- */
 .footer { text-align: center; padding: 24px 16px 40px; color: var(--text-muted); font-style: italic; }
 .heart { color: var(--primary); }

@@ -1,5 +1,5 @@
 // Lädt alle lokalen Fotos/Videos in den Supabase-Storage-Bucket "wedding".
-// Aufruf: node tools/upload-local.mjs
+// Aufruf: WEDDING_ADMIN_PW='<Admin-Passwort>' node tools/upload-local.mjs
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,8 +9,8 @@ const ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsI
 const BUCKET = 'wedding';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
+// Fotobox ist bereits vollständig hochgeladen und per Policy für Uploads gesperrt.
 const FOLDERS = [
-  { local: 'Hutzenthalers/Fotobox', slug: 'fotobox' },
   { local: 'Hutzenthalers/Hochzeit - Gästeupload', slug: 'gaesteupload' },
 ];
 
@@ -29,12 +29,29 @@ function sanitize(name) {
   return `${base}.${ext}`;
 }
 
+const ADMIN_PW = process.env.WEDDING_ADMIN_PW;
+if (!ADMIN_PW) {
+  console.error('Bitte Admin-Passwort setzen: WEDDING_ADMIN_PW=... node tools/upload-local.mjs');
+  process.exit(1);
+}
+const authRes = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+  method: 'POST',
+  headers: { apikey: ANON_KEY, 'content-type': 'application/json' },
+  body: JSON.stringify({ email: 'admin@hochzeit.local', password: ADMIN_PW }),
+});
+if (!authRes.ok) {
+  console.error('Login fehlgeschlagen:', (await authRes.text()).slice(0, 200));
+  process.exit(1);
+}
+const { access_token: TOKEN } = await authRes.json();
+console.log('Als Admin eingeloggt.');
+
 async function uploadFile(localPath, remotePath, mime, size) {
   const body = await readFile(localPath);
   const res = await fetch(`${SUPABASE_URL}/storage/v1/object/${BUCKET}/${remotePath}`, {
     method: 'POST',
     headers: {
-      Authorization: `Bearer ${ANON_KEY}`,
+      Authorization: `Bearer ${TOKEN}`,
       apikey: ANON_KEY,
       'content-type': mime,
       'x-upsert': 'false',
