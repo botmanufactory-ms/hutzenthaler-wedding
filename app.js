@@ -8,8 +8,10 @@ const SUPABASE_URL = 'https://ttlvnxjlorejwntxxxzt.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InR0bHZueGpsb3JlandudHh4eHp0Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM0NjM5MjgsImV4cCI6MjA5OTAzOTkyOH0.B9OtpkmV7qNs6CK0EVzRNJcPtzBHNrj9NwN4repfXlI';
 const BUCKET = 'wedding';
 const ADMIN_EMAIL = 'admin@hochzeit.local';
+const PAAR_EMAIL = 'brautpaar@hochzeit.local';
 const GUEST_EMAIL = 'gast@hochzeit.local';
 const GUEST_UPLOAD_SLUG = 'gaesteupload';
+const PRO_SLUG = 'hochzeitsfotos';
 const NO_UPLOAD_SLUGS = ['fotobox'];
 const URL_TTL = 60 * 60 * 24; // signierte URLs: 24h
 
@@ -28,6 +30,7 @@ const VIDEO_EXT = ['mp4', 'mov', 'webm', 'm4v'];
 
 let session = null;
 let isAdmin = false;
+let isPaar = false;
 let albumsCache = null;
 let currentMedia = [];
 let lbIndex = 0;
@@ -136,6 +139,7 @@ async function listAlbumFiles(slug) {
 
 function applySessionUi() {
   isAdmin = session?.user?.email === ADMIN_EMAIL;
+  isPaar = session?.user?.email === PAAR_EMAIL;
   btnNewAlbum.hidden = !isAdmin;
   btnLogout.hidden = !session;
 }
@@ -169,6 +173,7 @@ function renderLogin(errorMsg = '') {
     btn.disabled = true;
     err.hidden = true;
     let res = await supabase.auth.signInWithPassword({ email: ADMIN_EMAIL, password: pw });
+    if (res.error) res = await supabase.auth.signInWithPassword({ email: PAAR_EMAIL, password: pw });
     if (res.error) res = await supabase.auth.signInWithPassword({ email: GUEST_EMAIL, password: pw });
     btn.disabled = false;
     if (res.error) {
@@ -307,7 +312,9 @@ async function renderHome() {
 
 function canUploadTo(slug) {
   if (NO_UPLOAD_SLUGS.includes(slug)) return false;
-  return isAdmin || slug === GUEST_UPLOAD_SLUG;
+  if (slug === GUEST_UPLOAD_SLUG) return true;
+  if (slug === PRO_SLUG) return isAdmin || isPaar;
+  return isAdmin;
 }
 
 async function renderAlbum(slug) {
@@ -353,11 +360,18 @@ async function renderAlbum(slug) {
         <input id="up-author" type="text" placeholder="Dein Name (optional)" maxlength="60" autocomplete="off">
         <input id="up-message" type="text" placeholder="Eine Nachricht oder Anekdote zu euren Fotos (optional)" maxlength="500" autocomplete="off">
       </div>
-      <button class="btn btn-gold" id="btn-pick" type="button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 3-3 6 6"/></svg>
-        <span>Dateien auswählen</span>
-      </button>
+      <div class="upload-actions">
+        <button class="btn btn-gold" id="btn-pick" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-5 4 4 3-3 6 6"/></svg>
+          <span>Dateien auswählen</span>
+        </button>
+        <button class="btn" id="btn-pick-folder" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Ganzen Ordner auswählen</span>
+        </button>
+      </div>
       <input type="file" id="file-input" multiple accept="image/*,video/*" hidden>
+      <input type="file" id="folder-input" webkitdirectory multiple hidden>
       <div class="upload-progress" id="upload-progress"></div>
     </div>` : ''}
     <div class="photo-grid" id="photo-grid">
@@ -373,6 +387,9 @@ async function renderAlbum(slug) {
     });
     document.getElementById('btn-pick').addEventListener('click', () => input.click());
     input.addEventListener('change', () => uploadFiles(slug, [...input.files]));
+    const folderInput = document.getElementById('folder-input');
+    document.getElementById('btn-pick-folder').addEventListener('click', () => folderInput.click());
+    folderInput.addEventListener('change', () => uploadFiles(slug, [...folderInput.files]));
     ['dragover', 'dragenter'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add('dragover'); }));
     ['dragleave', 'drop'].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.remove('dragover'); }));
     zone.addEventListener('drop', (e) => uploadFiles(slug, [...e.dataTransfer.files]));
@@ -622,62 +639,122 @@ async function makeThumb(file) {
   return null;
 }
 
+const UPLOAD_CONCURRENCY = 3;
+const COMPACT_THRESHOLD = 20;
+
 async function uploadFiles(slug, files) {
   if (!canUploadTo(slug)) { toast('In dieses Album kann nicht hochgeladen werden.'); return; }
   const valid = files.filter((f) => isImage(f.name) || isVideo(f.name) || f.type.startsWith('image/') || f.type.startsWith('video/'));
   if (!valid.length) { toast('Bitte nur Fotos oder Videos hochladen.'); return; }
 
+  const compact = valid.length > COMPACT_THRESHOLD;
+  const totalBytes = valid.reduce((s, f) => s + f.size, 0);
   const progressBox = document.getElementById('upload-progress');
   progressBox.innerHTML = '';
-  const rows = valid.map((f) => {
-    const row = document.createElement('div');
-    row.className = 'up-row';
-    row.innerHTML = `
-      <span class="up-name">${esc(f.name)}</span>
-      <span class="up-bar"><i></i></span>
-      <span class="up-status"><span class="spinner" style="width:18px;height:18px;border-width:2px;margin:0"></span></span>`;
-    progressBox.appendChild(row);
-    return row;
-  });
 
-  let ok = 0, fail = 0;
-  const uploadedPaths = [];
-  for (let i = 0; i < valid.length; i++) {
-    const f = valid[i];
-    const bar = rows[i].querySelector('.up-bar > i');
-    const status = rows[i].querySelector('.up-status');
-    const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    const path = `${slug}/${stamp}-${sanitizeFileName(f.name)}`;
-    try {
-      await uploadOne(path, f, (p) => { bar.style.width = `${Math.round(p * 100)}%`; });
-      bar.style.width = '100%';
-      status.innerHTML = `<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
-      ok++;
-      uploadedPaths.push(path);
-      try {
-        const tb = await makeThumb(f);
-        if (tb) await uploadOne(`thumbs/${path}.jpg`, new File([tb], 'thumb.jpg', { type: 'image/jpeg' }), () => {});
-      } catch { /* Grid hat Fallbacks */ }
-    } catch (err) {
-      console.error(err);
-      status.innerHTML = `<svg class="fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>`;
-      fail++;
-    }
+  let rows = [];
+  if (compact) {
+    progressBox.innerHTML = `
+      <div class="up-row">
+        <span class="up-name" id="bulk-label">Starte Upload von ${valid.length} Dateien (${fmtBytes(totalBytes)}) …</span>
+        <span class="up-bar"><i id="bulk-bar"></i></span>
+      </div>
+      <div id="bulk-fails" class="bulk-fails"></div>`;
+  } else {
+    rows = valid.map((f) => {
+      const row = document.createElement('div');
+      row.className = 'up-row';
+      row.innerHTML = `
+        <span class="up-name">${esc(f.name)}</span>
+        <span class="up-bar"><i></i></span>
+        <span class="up-status"><span class="spinner" style="width:18px;height:18px;border-width:2px;margin:0"></span></span>`;
+      progressBox.appendChild(row);
+      return row;
+    });
   }
+
+  // Warnung, falls das Fenster während des Uploads geschlossen wird
+  const guard = (e) => { e.preventDefault(); e.returnValue = ''; };
+  window.addEventListener('beforeunload', guard);
+
+  let ok = 0, fail = 0, doneBytes = 0;
+  const inflight = new Map();
+  const uploadedPaths = [];
+  const queue = valid.map((f, i) => ({ f, i }));
+
+  const updateBulk = () => {
+    if (!compact) return;
+    const label = document.getElementById('bulk-label');
+    const bar = document.getElementById('bulk-bar');
+    if (!label || !bar) return;
+    let cur = doneBytes;
+    inflight.forEach((b) => { cur += b; });
+    bar.style.width = `${Math.min(100, Math.round((cur / totalBytes) * 100))}%`;
+    label.textContent = `${ok + fail} / ${valid.length} Dateien · ${fmtBytes(Math.min(cur, totalBytes))} von ${fmtBytes(totalBytes)}${fail ? ` · ${fail} Fehler` : ''}`;
+  };
+
+  const worker = async () => {
+    while (queue.length) {
+      const { f, i } = queue.shift();
+      const bar = compact ? null : rows[i].querySelector('.up-bar > i');
+      const status = compact ? null : rows[i].querySelector('.up-status');
+      const stamp = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+      const path = `${slug}/${stamp}-${sanitizeFileName(f.name)}`;
+
+      let success = false;
+      for (let attempt = 1; attempt <= 3 && !success; attempt++) {
+        try {
+          await uploadOne(path, f, (p) => {
+            if (bar) bar.style.width = `${Math.round(p * 100)}%`;
+            inflight.set(i, p * f.size);
+            updateBulk();
+          });
+          success = true;
+        } catch (err) {
+          console.error(`${f.name} (Versuch ${attempt}):`, err);
+          if (attempt < 3) await new Promise((r) => setTimeout(r, 1500 * attempt));
+        }
+      }
+      inflight.delete(i);
+
+      if (success) {
+        ok++;
+        doneBytes += f.size;
+        uploadedPaths.push(path);
+        if (bar) bar.style.width = '100%';
+        if (status) status.innerHTML = `<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 13l4 4L19 7" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        try {
+          const tb = await makeThumb(f);
+          if (tb) await uploadOne(`thumbs/${path}.jpg`, new File([tb], 'thumb.jpg', { type: 'image/jpeg' }), () => {});
+        } catch { /* Grid hat Fallbacks */ }
+      } else {
+        fail++;
+        if (status) status.innerHTML = `<svg class="fail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 6l12 12M18 6L6 18" stroke-linecap="round"/></svg>`;
+        if (compact) document.getElementById('bulk-fails')?.insertAdjacentHTML('beforeend',
+          `<p class="bulk-fail-name">Fehlgeschlagen: ${esc(f.name)}</p>`);
+      }
+      updateBulk();
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(UPLOAD_CONCURRENCY, valid.length) }, worker));
+  window.removeEventListener('beforeunload', guard);
 
   // Optionale Gästebuch-Nachricht an die hochgeladenen Fotos hängen
   const author = document.getElementById('up-author')?.value.trim() || '';
   const message = document.getElementById('up-message')?.value.trim() || '';
   if (message && uploadedPaths.length) {
-    const { error } = await supabase.from('photo_notes').insert(
-      uploadedPaths.map((p) => ({ slug, path: p, author, message }))
-    );
-    if (error) console.error(error);
+    for (let i = 0; i < uploadedPaths.length; i += 200) {
+      const { error } = await supabase.from('photo_notes').insert(
+        uploadedPaths.slice(i, i + 200).map((p) => ({ slug, path: p, author, message }))
+      );
+      if (error) { console.error(error); break; }
+    }
   }
 
   toast(fail
-    ? `${ok} hochgeladen, ${fail} fehlgeschlagen.`
-    : `${ok} ${ok === 1 ? 'Datei' : 'Dateien'} erfolgreich hochgeladen – danke!`);
+    ? `${ok} hochgeladen, ${fail} fehlgeschlagen – fehlgeschlagene Dateien einfach erneut auswählen.`
+    : `${ok} ${ok === 1 ? 'Datei' : 'Dateien'} erfolgreich hochgeladen – danke!`, 6000);
   await loadAlbumGrid(slug);
 }
 

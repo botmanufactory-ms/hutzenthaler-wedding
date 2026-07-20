@@ -398,7 +398,9 @@ main {
 }
 .upload-zone.dragover { border-color: var(--gold); background: rgba(232, 217, 180, 0.35); }
 .upload-zone p { color: var(--ink-muted); margin-bottom: 14px; font-size: 0.95rem; }
-.upload-zone .btn { margin-inline: auto; }
+.upload-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; }
+.bulk-fails { display: grid; gap: 4px; margin-top: 6px; }
+.bulk-fail-name { font-size: 0.82rem; color: #b4423a; }
 
 .upload-progress { margin-top: 16px; text-align: left; display: grid; gap: 8px; }
 .up-row { display: flex; align-items: center; gap: 12px; font-size: 0.85rem; }

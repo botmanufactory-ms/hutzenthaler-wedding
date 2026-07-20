@@ -4,7 +4,8 @@ Gemeinsames Foto-Portal für die gesamte Hochzeitsgesellschaft.
 
 - **Login nur mit Passwort** – die ganze Seite (ansehen, hochladen, herunterladen) ist passwortgeschützt; Gäste und Admin nutzen dasselbe Login-Feld mit unterschiedlichen Passwörtern
 - **Alben ansehen** – alle Fotos & Videos in hoher Auflösung, mit Karussell/Lightbox
-- **Hochladen** – Gäste können nur in das Album „Hochzeit – Gästeupload" hochladen; der Admin in jedes Album außer Fotobox (dort kann niemand hochladen)
+- **Hochladen** – Gäste können nur in das Album „Hochzeit – Gästeupload" hochladen; das Brautpaar (eigenes Passwort) zusätzlich in „Hochzeitsfotos"; der Admin in jedes Album außer Fotobox (dort kann niemand hochladen)
+- **Bulk-Upload** – „Ganzen Ordner auswählen", 3 parallele Uploads mit automatischen Wiederholungsversuchen, kompakte Fortschrittsanzeige ab 20 Dateien
 - **Herunterladen** – einzelne Dateien oder ganze Alben als ZIP
 - **Admin** – neue Alben anlegen über den Button „Neues Album" (nur als Admin sichtbar, Passwort-geschützt)
 
@@ -30,6 +31,10 @@ In Supabase (SQL-Editor):
 -- Gäste-Passwort
 update auth.users set encrypted_password = extensions.crypt('NEUES_PASSWORT', extensions.gen_salt('bf'))
 where email = 'gast@hochzeit.local';
+
+-- Brautpaar-Passwort (Upload ins Album „Hochzeitsfotos")
+update auth.users set encrypted_password = extensions.crypt('NEUES_PASSWORT', extensions.gen_salt('bf'))
+where email = 'brautpaar@hochzeit.local';
 
 -- Admin-Passwort (Login)
 update auth.users set encrypted_password = extensions.crypt('NEUES_PASSWORT', extensions.gen_salt('bf'))
